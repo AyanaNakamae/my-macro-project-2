@@ -1,217 +1,213 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
-import matplotlib.patches as mpatches
+import matplotlib.font_manager as fm
 
-# パラメータ設定
-gamma = 2.0  # 相対的危険回避度
-beta = 0.985  # 割引因子
-R = 1.025**20  # 利子率(20年間)
-tax_rate = 0.30  # 所得税率
-pension_per_person = 0.4955  # 一人当たり年金額
+# Set up Japanese font for matplotlib
+plt.rcParams['font.family'] = 'DejaVu Sans'
 
-# 生産性状態
-productivity = np.array([0.8027, 1.0, 1.2457])
+# Parameters
+gamma = 2.0  # Risk aversion parameter
+beta = 0.985  # Discount factor
+r = 0.025  # Interest rate
+tax_rate = 0.30  # Income tax rate
+productivity_levels = np.array([0.8027, 1.0, 1.2457])
+pension_per_person = 0.3124  # From problem 2
 
-# 遷移確率行列
+# Transition matrix P
 P = np.array([
     [0.7451, 0.2528, 0.0021],
     [0.1360, 0.7281, 0.1360],
     [0.0021, 0.2528, 0.7451]
 ])
 
-# 定常分布（各生産性状態の人口割合）
-eigenvals, eigenvecs = np.linalg.eig(P.T)
-stationary_idx = np.argmax(np.real(eigenvals))
-stationary_dist = np.real(eigenvecs[:, stationary_idx])
-stationary_dist = stationary_dist / np.sum(stationary_dist)
-
-print("定常分布:", stationary_dist)
-print("生産性状態:", productivity)
-
-# CRRA効用関数
+# Utility function
 def utility(c, gamma):
     if gamma == 1:
         return np.log(c)
     else:
         return (c**(1-gamma)) / (1-gamma)
 
-# 年金制度なしの価値関数（問1の結果）
-def value_function_no_pension(a2, a1, productivity_idx):
-    """
-    年金制度なしの価値関数
-    a2: 次期の資産
-    a1: 現在の資産
-    productivity_idx: 生産性状態のインデックス
-    """
-    prod = productivity[productivity_idx]
+# Expected utility calculation
+def expected_utility_period3(c2, a2, gamma, beta, P, productivity_levels, pension=0):
+    """Calculate expected utility for period 3 given consumption in period 2 and assets"""
+    eu3 = 0
+    for j in range(3):  # Future productivity states
+        for i in range(3):  # Current productivity states (for transition probability)
+            # Period 3 consumption = assets + pension (no labor income in old age)
+            c3 = a2 * (1 + r) + pension
+            if c3 > 0:
+                eu3 += P[i, j] * utility(c3, gamma)
+    return eu3
+
+def solve_individual_problem_with_pension(e1, gamma, beta, r, tax_rate, P, productivity_levels, pension):
+    """Solve the individual optimization problem with pension system"""
     
-    # 第1期の消費
-    c1 = a1 + prod - a2/R
-    if c1 <= 0:
-        return -np.inf
-    
-    # 第2期の期待効用を計算
-    expected_utility_2 = 0
-    for j in range(3):
-        prob = P[productivity_idx, j]
-        prod_2 = productivity[j]
+    def objective(a1):
+        """Objective function to minimize (negative of expected utility)"""
+        # Period 1 consumption
+        c1 = e1 - a1
+        if c1 <= 0:
+            return 1e10
         
-        # 第2期の最適消費・貯蓄を計算
-        def objective_2(a3):
-            c2 = a2 + prod_2 - a3/R
-            if c2 <= 0:
-                return np.inf
-            
-            # 第3期の期待効用
-            expected_utility_3 = 0
-            for k in range(3):
-                prob_3 = P[j, k]
-                prod_3 = productivity[k]
-                c3 = a3 + prod_3
-                if c3 <= 0:
-                    return np.inf
-                expected_utility_3 += prob_3 * utility(c3, gamma)
-            
-            return -(utility(c2, gamma) + beta * expected_utility_3)
+        u1 = utility(c1, gamma)
         
-        # 第2期の最適化
-        result = minimize_scalar(objective_2, bounds=(0, (a2 + prod_2) * R), method='bounded')
-        if result.success:
-            expected_utility_2 += prob * (-result.fun)
-        else:
-            expected_utility_2 += prob * utility(a2 + prod_2, gamma)  # 貯蓄ゼロの場合
-    
-    return utility(c1, gamma) + beta * expected_utility_2
-
-# 年金制度ありの価値関数
-def value_function_with_pension(a2, a1, productivity_idx):
-    """
-    年金制度ありの価値関数
-    a2: 次期の資産
-    a1: 現在の資産
-    productivity_idx: 生産性状態のインデックス
-    """
-    prod = productivity[productivity_idx]
-    
-    # 第1期の消費（税引き後所得）
-    after_tax_income = prod * (1 - tax_rate)
-    c1 = a1 + after_tax_income - a2/R
-    if c1 <= 0:
-        return -np.inf
-    
-    # 第2期の期待効用を計算
-    expected_utility_2 = 0
-    for j in range(3):
-        prob = P[productivity_idx, j]
-        prod_2 = productivity[j]
-        after_tax_income_2 = prod_2 * (1 - tax_rate)
+        # Expected utility from periods 2 and 3
+        eu2_plus_3 = 0
         
-        # 第2期の最適消費・貯蓄を計算
-        def objective_2(a3):
-            c2 = a2 + after_tax_income_2 - a3/R
-            if c2 <= 0:
-                return np.inf
+        for i in range(3):  # Period 2 productivity states
+            prob_i = 1/3  # Stationary probability (equal distribution)
             
-            # 第3期の期待効用（年金受給）
-            expected_utility_3 = 0
-            for k in range(3):
-                prob_3 = P[j, k]
-                c3 = a3 + pension_per_person  # 年金のみ
-                if c3 <= 0:
-                    return np.inf
-                expected_utility_3 += prob_3 * utility(c3, gamma)
+            # Period 2 after-tax income
+            after_tax_income = productivity_levels[i] * (1 - tax_rate)
             
-            return -(utility(c2, gamma) + beta * expected_utility_3)
+            # Period 2 resources = assets + after-tax income
+            resources_2 = a1 * (1 + r) + after_tax_income
+            
+            # Optimal period 2 problem: choose a2 to maximize utility
+            def period2_objective(a2):
+                c2 = resources_2 - a2
+                if c2 <= 0:
+                    return 1e10
+                
+                u2 = utility(c2, gamma)
+                
+                # Expected utility from period 3
+                eu3 = 0
+                for j in range(3):
+                    c3 = a2 * (1 + r) + pension
+                    if c3 > 0:
+                        eu3 += P[i, j] * utility(c3, gamma)
+                
+                return -(u2 + beta * eu3)
+            
+            # Solve for optimal a2
+            result = minimize_scalar(period2_objective, bounds=(0, resources_2), method='bounded')
+            optimal_a2 = result.x
+            max_utility_2_plus_3 = -result.fun
+            
+            eu2_plus_3 += prob_i * max_utility_2_plus_3
         
-        # 第2期の最適化
-        result = minimize_scalar(objective_2, bounds=(0, (a2 + after_tax_income_2) * R), method='bounded')
-        if result.success:
-            expected_utility_2 += prob * (-result.fun)
-        else:
-            expected_utility_2 += prob * utility(a2 + after_tax_income_2, gamma)  # 貯蓄ゼロの場合
+        total_utility = u1 + beta * eu2_plus_3
+        return -total_utility
     
-    return utility(c1, gamma) + beta * expected_utility_2
-
-# 最適貯蓄政策関数を計算
-def compute_optimal_savings(a1_grid, value_function):
-    """最適貯蓄政策関数を計算"""
-    optimal_savings = np.zeros((len(a1_grid), 3))
+    # Solve for optimal a1
+    result = minimize_scalar(objective, bounds=(0, e1), method='bounded')
+    optimal_a1 = result.x
     
-    for i, a1 in enumerate(a1_grid):
-        for prod_idx in range(3):
-            prod = productivity[prod_idx]
-            
-            # 制約条件を設定
-            if value_function == value_function_with_pension:
-                max_savings = (a1 + prod * (1 - tax_rate)) * R
-            else:
-                max_savings = (a1 + prod) * R
-            
-            # 最適化
-            def objective(a2):
-                return -value_function(a2, a1, prod_idx)
-            
-            result = minimize_scalar(objective, bounds=(0, max_savings), method='bounded')
-            
-            if result.success:
-                optimal_savings[i, prod_idx] = result.x
-            else:
-                optimal_savings[i, prod_idx] = 0
+    return optimal_a1
+
+def solve_individual_problem_no_pension(e1, gamma, beta, r, P, productivity_levels):
+    """Solve the individual optimization problem without pension system"""
     
-    return optimal_savings
+    def objective(a1):
+        """Objective function to minimize (negative of expected utility)"""
+        # Period 1 consumption
+        c1 = e1 - a1
+        if c1 <= 0:
+            return 1e10
+        
+        u1 = utility(c1, gamma)
+        
+        # Expected utility from periods 2 and 3
+        eu2_plus_3 = 0
+        
+        for i in range(3):  # Period 2 productivity states
+            prob_i = 1/3  # Stationary probability (equal distribution)
+            
+            # Period 2 income (no tax in no-pension case)
+            income_2 = productivity_levels[i]
+            
+            # Period 2 resources = assets + income
+            resources_2 = a1 * (1 + r) + income_2
+            
+            # Optimal period 2 problem: choose a2 to maximize utility
+            def period2_objective(a2):
+                c2 = resources_2 - a2
+                if c2 <= 0:
+                    return 1e10
+                
+                u2 = utility(c2, gamma)
+                
+                # Expected utility from period 3
+                eu3 = 0
+                for j in range(3):
+                    c3 = a2 * (1 + r)  # No pension
+                    if c3 > 0:
+                        eu3 += P[i, j] * utility(c3, gamma)
+                
+                return -(u2 + beta * eu3)
+            
+            # Solve for optimal a2
+            result = minimize_scalar(period2_objective, bounds=(0, resources_2), method='bounded')
+            optimal_a2 = result.x
+            max_utility_2_plus_3 = -result.fun
+            
+            eu2_plus_3 += prob_i * max_utility_2_plus_3
+        
+        total_utility = u1 + beta * eu2_plus_3
+        return -total_utility
+    
+    # Solve for optimal a1
+    result = minimize_scalar(objective, bounds=(0, e1), method='bounded')
+    optimal_a1 = result.x
+    
+    return optimal_a1
 
-# 資産グリッドを設定
-a1_grid = np.linspace(0, 2.0, 100)
+# Calculate savings policy functions
+initial_assets_range = np.linspace(0.01, 2.0, 100)
+savings_no_pension = {i: [] for i in range(3)}
+savings_with_pension = {i: [] for i in range(3)}
 
-# 年金制度なしの最適貯蓄
-print("年金制度なしの最適貯蓄を計算中...")
-optimal_savings_no_pension = compute_optimal_savings(a1_grid, value_function_no_pension)
+print("Calculating savings policy functions...")
+print("Without pension system:")
+for i, productivity in enumerate(productivity_levels):
+    print(f"  Processing productivity level {i+1}: {productivity}")
+    for a in initial_assets_range:
+        # Total initial resources = assets + productivity
+        total_resources = a + productivity
+        optimal_saving_no_pension = solve_individual_problem_no_pension(
+            total_resources, gamma, beta, r, P, productivity_levels)
+        savings_no_pension[i].append(optimal_saving_no_pension)
 
-# 年金制度ありの最適貯蓄
-print("年金制度ありの最適貯蓄を計算中...")
-optimal_savings_with_pension = compute_optimal_savings(a1_grid, value_function_with_pension)
+print("\nWith pension system:")
+for i, productivity in enumerate(productivity_levels):
+    print(f"  Processing productivity level {i+1}: {productivity}")
+    for a in initial_assets_range:
+        # Total initial resources = assets + after-tax productivity
+        after_tax_productivity = productivity * (1 - tax_rate)
+        total_resources = a + after_tax_productivity
+        optimal_saving_with_pension = solve_individual_problem_with_pension(
+            total_resources, gamma, beta, r, tax_rate, P, productivity_levels, pension_per_person)
+        savings_with_pension[i].append(optimal_saving_with_pension)
 
-# グラフの描画（年金制度ありのみ）
-plt.figure(figsize=(10, 6))
+# Create single comparison plot with all lines
+fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
-# 年金制度ありの政策関数
-plt.plot(a1_grid, optimal_savings_with_pension[:, 0], 'b-', label='Low productivity (0.8027)', linewidth=2)
-plt.plot(a1_grid, optimal_savings_with_pension[:, 1], 'g-', label='Mid productivity (1.0)', linewidth=2)
-plt.plot(a1_grid, optimal_savings_with_pension[:, 2], 'r-', label='High productivity (1.2457)', linewidth=2)
+productivity_labels = ['Low (0.8027)', 'Mid (1.0)', 'High (1.2457)']
+colors = ['blue', 'green', 'red']
 
-# 45度線
-plt.plot(a1_grid, a1_grid, 'k--', label='45 degree line', alpha=0.5)
+for i in range(3):
+    ax.plot(initial_assets_range, savings_no_pension[i], 
+           color=colors[i], linewidth=2, label=f'{productivity_labels[i]} - No Pension')
+    ax.plot(initial_assets_range, savings_with_pension[i], 
+           color=colors[i], linewidth=2, linestyle='--', alpha=0.8,
+           label=f'{productivity_labels[i]} - With Pension')
 
-plt.xlabel('Initial Assets (Excluding Interest)')
-plt.ylabel('Next Period Assets (Excluding Interest)')
-plt.title('Savings Policy Function (With Pension System)')
-plt.legend()
-plt.grid(True, alpha=0.3)
+# Add 45-degree line
+ax.plot(initial_assets_range, initial_assets_range, 
+       'k--', alpha=0.3, label='45° line')
+
+ax.set_xlabel('Initial Assets (Excluding Interest)', fontsize=12)
+ax.set_ylabel('Next Period Assets (Excluding Interest)', fontsize=12)
+ax.set_title('Savings Policy Function by Productivity Level (Pension vs No Pension)', fontsize=14)
+ax.grid(True, alpha=0.3)
+ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+ax.set_xlim(0, 2.0)
+ax.set_ylim(0, 2.0)
+
 plt.tight_layout()
+plt.savefig('savings_policy_comparison.png', dpi=300, bbox_inches='tight')
 plt.show()
 
-# 貯蓄の差を計算
-savings_diff = optimal_savings_no_pension - optimal_savings_with_pension
-
-print("\n=== 分析結果 ===")
-print(f"年金額: {pension_per_person:.4f}")
-print(f"所得税率: {tax_rate*100:.1f}%")
-print(f"利子率: {(R-1)*100:.2f}%")
-
-print("\n=== 貯蓄水準の変化 ===")
-for i, prod_name in enumerate(['低生産性', '中生産性', '高生産性']):
-    avg_diff = np.mean(savings_diff[:, i])
-    print(f"{prod_name}: 平均貯蓄減少額 = {avg_diff:.4f}")
-
-# 特定の初期資産水準での比較
-asset_levels = [0.5, 1.0, 1.5]
-print("\n=== 特定の初期資産水準での貯蓄比較 ===")
-for asset_level in asset_levels:
-    idx = np.argmin(np.abs(a1_grid - asset_level))
-    print(f"\n初期資産 {asset_level}:")
-    for i, prod_name in enumerate(['低生産性', '中生産性', '高生産性']):
-        no_pension = optimal_savings_no_pension[idx, i]
-        with_pension = optimal_savings_with_pension[idx, i]
-        diff = no_pension - with_pension
-        print(f"  {prod_name}: {no_pension:.4f} → {with_pension:.4f} (差: {diff:.4f})")
+print("Graph generated successfully!")
